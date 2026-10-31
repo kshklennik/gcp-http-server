@@ -1,38 +1,76 @@
 steps:
-  - name: 'gcr.io/cloud-builders/docker'
+  - id: build
+    name: gcr.io/cloud-builders/docker
     args:
-      - 'build'
-      - '-t'
-      - 'europe-west1-docker.pkg.dev/$PROJECT_ID/docker-repo/http-server:$COMMIT_SHA'
-      - '.'
+      - build
+      - -t
+      - europe-west1-docker.pkg.dev/$PROJECT_ID/docker-repo/http-server:$COMMIT_SHA
+      - .
 
-  - name: 'gcr.io/cloud-builders/docker'
+  - id: push
+    name: gcr.io/cloud-builders/docker
     args:
-      - 'push'
-      - 'europe-west1-docker.pkg.dev/$PROJECT_ID/docker-repo/http-server:$COMMIT_SHA'
+      - push
+      - europe-west1-docker.pkg.dev/$PROJECT_ID/docker-repo/http-server:$COMMIT_SHA
 
-  - name: 'gcr.io/cloud-builders/kubectl'
+  - id: migrate
+    name: gcr.io/cloud-builders/docker
+    entrypoint: bash
+    secretEnv: ['FLYWAY_PASSWORD']
     args:
-      - 'set'
-      - 'image'
-      - 'deployment/http-server'
-      - 'http-server=europe-west1-docker.pkg.dev/$PROJECT_ID/docker-repo/http-server:$COMMIT_SHA'
+      - -ceu
+      - |
+        trap 'docker rm -f migration-proxy >/dev/null 2>&1 || true' EXIT
+
+        docker run -d \
+          --name migration-proxy \
+          --network cloudbuild \
+          gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.18.2 \
+          --address=0.0.0.0 \
+          --port=5432 \
+          --structured-logs \
+          "$PROJECT_ID:europe-west1:http-server-db"
+
+        docker run --rm \
+          --network cloudbuild \
+          -v /workspace/migrations:/flyway/sql:ro \
+          -e FLYWAY_PASSWORD \
+          redgate/flyway:10.20.1 \
+          -url=jdbc:postgresql://migration-proxy:5432/appdb \
+          -user=appuser \
+          -connectRetries=30 \
+          -locations=filesystem:/flyway/sql \
+          migrate
+
+  - id: deploy
+    name: gcr.io/cloud-builders/kubectl
+    args:
+      - set
+      - image
+      - deployment/http-server
+      - http-server=europe-west1-docker.pkg.dev/$PROJECT_ID/docker-repo/http-server:$COMMIT_SHA
     env:
-      - 'CLOUDSDK_COMPUTE_REGION=europe-west1'
-      - 'CLOUDSDK_CONTAINER_CLUSTER=http-server-cluster'
+      - CLOUDSDK_COMPUTE_REGION=europe-west1
+      - CLOUDSDK_CONTAINER_CLUSTER=http-server-cluster
 
-  - name: 'gcr.io/cloud-builders/kubectl'
+  - id: verify-rollout
+    name: gcr.io/cloud-builders/kubectl
     args:
-      - 'rollout'
-      - 'status'
-      - 'deployment/http-server'
-      - '--timeout=300s'
+      - rollout
+      - status
+      - deployment/http-server
+      - --timeout=300s
     env:
-      - 'CLOUDSDK_COMPUTE_REGION=europe-west1'
-      - 'CLOUDSDK_CONTAINER_CLUSTER=http-server-cluster'
+      - CLOUDSDK_COMPUTE_REGION=europe-west1
+      - CLOUDSDK_CONTAINER_CLUSTER=http-server-cluster
+
+availableSecrets:
+  secretManager:
+    - versionName: projects/$PROJECT_ID/secrets/http-server-db-password/versions/latest
+      env: FLYWAY_PASSWORD
 
 images:
-  - 'europe-west1-docker.pkg.dev/$PROJECT_ID/docker-repo/http-server:$COMMIT_SHA'
+  - europe-west1-docker.pkg.dev/$PROJECT_ID/docker-repo/http-server:$COMMIT_SHA
 
 options:
   logging: CLOUD_LOGGING_ONLY

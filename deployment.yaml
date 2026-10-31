@@ -1,0 +1,40 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: http-server
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: http-server
+  template:
+    metadata:
+      labels:
+        app: http-server
+    spec:
+      serviceAccountName: http-server
+      containers:
+        - name: http-server
+          image: europe-west1-docker.pkg.dev/cloudx-task-513315/docker-repo/http-server:f793aff4f8541c382a1d69cfbe6f9bef5bbbaf70
+          ports:
+            - containerPort: 8080
+          envFrom:
+            - secretRef:
+                name: http-server-db
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "256Mi"
+        - name: cloud-sql-proxy
+          image: gcr.io/cloud-sql-connectors/cloud-sql-proxy:2.18.2
+          args:
+            - "--private-ip"
+            - "--structured-logs"
+            - "--port=5432"
+            - "cloudx-task-513315:europe-west1:http-server-db"
+          securityContext:
+            runAsNonRoot: true
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"

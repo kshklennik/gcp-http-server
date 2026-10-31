@@ -2,7 +2,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 
 class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        body = b"Hello from GCP Docker!/Hello from Cloud Build!\n"
+        body = b"Hello from Cloud Build!/Hello from Kubernetes v2!\n"
         self.send_response(200)
         self.send_header("Content-Type", "text/plain")
         self.send_header("Content-Length", str(len(body)))
